@@ -6,6 +6,8 @@ import { api } from "../../../../convex/_generated/api";
 import { Id } from "../../../../convex/_generated/dataModel";
 import { inngest } from "@/inngest/client";
 
+
+
 const requestSchema = z.object({
     conversationId: z.string(),
     message: z.string(),
@@ -13,7 +15,6 @@ const requestSchema = z.object({
 
 export async function POST(request: Request) {
     const { userId } = await auth();
-
 
     if (!userId) {
         return NextResponse.json({ error: "Unauthorized"}, { status: 401 })
@@ -46,7 +47,34 @@ export async function POST(request: Request) {
 
     const projectId = conversation.projectId;
 
-    // Todo: Check for processing messages
+    // Find all processing messages in this project
+        const processingMessages = await convex.query(
+            api.system.getProcessingMessages,
+            {
+                    internalKey,
+                    projectId,
+            }
+        );
+
+        if (processingMessages.length > 0) {
+            // Cancel all processing messages   
+            await Promise.all(
+                processingMessages.map(async (msg) => {
+                await inngest.send({
+                    name: "message/cancel",
+                    data: {
+                        messageId: msg._id,
+                    },
+                })
+
+                await convex.mutation(api.system.updateMessageStatus, {
+                    internalKey,
+                    messageId: msg._id,
+                    status: "cancelled",
+                });
+        })
+    );
+}
 
     // Create a user message
     await convex.mutation(api.system.createMessage, {
@@ -68,11 +96,14 @@ export async function POST(request: Request) {
         }
     );
 
-    // todo: Invoke inngest to process the message
+    // Trigger inngest to process the message
     const event = await inngest.send({
         name: "message/sent",
         data: {
             messageId: assistantMessageId,
+            conversationId,
+            projectId,
+            message,
         },
     })
 
@@ -80,5 +111,6 @@ export async function POST(request: Request) {
         success: true,
         eventId: event.ids[0],
         messageId: assistantMessageId,
-    });
+        });
+    
 };
