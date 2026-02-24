@@ -20,22 +20,12 @@ import { Field, FieldError, FieldLabel } from "@/components/ui/field";
 import { Id } from "../../../../convex/_generated/dataModel";
 
 const formSchema = z.object({
-  url: z.string().url("Please enter a valid URL"),
+  url: z.url("Please enter a valid URL"),
 });
 
 interface ImportGithubDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-}
-
-interface ImportResponse {
-  success: boolean;
-  projectId: Id<"projects">;
-  eventId: string;
-}
-
-interface ErrorResponse {
-  error: string;
 }
 
 export const ImportGithubDialog = ({
@@ -54,51 +44,47 @@ export const ImportGithubDialog = ({
     },
     onSubmit: async ({ value }) => {
       try {
-        const response = await ky
+        const { projectId } = await ky
           .post("/api/github/import", {
             json: { url: value.url },
           })
-          .json<ImportResponse>();
-
-        if (!response.success) {
-          throw new Error("Import failed");
-        }
+          .json<{ 
+            success: boolean; 
+            projectId: Id<"projects">,
+            eventId: string;
+          }>()
 
         toast.success("Importing repository...");
         onOpenChange(false);
         form.reset();
 
-        router.push(`/projects/${response.projectId}`);
+        router.push(`/projects/${projectId}`);
       } catch (error) {
         if (error instanceof HTTPError) {
-          try {
-            const body = await error.response.json<ErrorResponse>();
-            const errorMessage = body.error ?? "Unknown error";
-
-            if (errorMessage.includes("GitHub not connected")) {
-              toast.error("GitHub account not connected", {
-                action: {
-                  label: "Connect",
-                  onClick: () => openUserProfile(),
-                },
-                duration: 5000,
-              });
-              onOpenChange(false);
-              return;
-            }
-
-            toast.error(errorMessage);
-          } catch (parseError) {
-            toast.error("Unable to import repository. Please try again later.");
+          const body = await error.response.json<{ error: string }>();
+          if (body.error?.includes("Pro plan required")) {
+            toast.error("Upgrade to import repositories", {
+              action: {
+                label: "Upgrade",
+                onClick: () => openUserProfile(),
+              },
+            });
+            onOpenChange(false);
+            return;
           }
-          return;
-        }
 
-        if (error instanceof Error) {
-          toast.error(error.message);
-        } else {
-          toast.error("Unable to import repository. Please check the URL and try again");
+          if (body.error?.includes("GitHub not connected")) {
+            toast.error("GitHub account not connected", {
+              action: {
+                label: "Connect",
+                onClick: () => openUserProfile(),
+              },
+            });
+            onOpenChange(false);
+            return;
+          }
         }
+        toast.error("Unable to import repository. Please check the URL and try again");
       }
     },
   });
